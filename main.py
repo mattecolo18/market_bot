@@ -30,20 +30,56 @@ import yfinance as yf
 # ---------------------------------------------------------------
 TICKERS = ["AAPL", "MSFT", "NESN.SW", "UBSG.SW", "^GSPC"]
 
+# Used to compute each ticker's relative 1-month performance
+BENCHMARK_TICKER = "^GSPC"
+# Daily % move (absolute value) that triggers an alert flag on a ticker
+ALERT_THRESHOLD_PCT = 3.0
+
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
+def compute_sma(close_series, window):
+    """Simple moving average over the last `window` trading days."""
+    if len(close_series) < window:
+        return None
+    return close_series.tail(window).mean()
+
+
+def compute_rsi(close_series, period=14):
+    """Relative Strength Index (simple average version, not Wilder-smoothed)."""
+    if len(close_series) < period + 1:
+        return None
+    delta = close_series.diff().dropna()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.tail(period).mean()
+    avg_loss = loss.tail(period).mean()
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
+
+
+def one_month_return(close_series):
+    """Approx. 1-month return using ~21 trading days."""
+    if len(close_series) < 22:
+        return None
+    return (close_series.iloc[-1] / close_series.iloc[-22] - 1) * 100
+
+
 def fetch_data(ticker: str):
-    """Fetch the latest price and daily % change for one ticker."""
+    """Fetch price, moving averages, RSI and 1-month return for one ticker."""
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="5d")
+        # 1 year of history gives us enough data for the 200-day SMA
+        hist = stock.history(period="1y")
         if hist.empty or len(hist) < 2:
             return None
 
-        last_close = hist["Close"].iloc[-1]
-        prev_close = hist["Close"].iloc[-2]
+        close = hist["Close"]
+        last_close = close.iloc[-1]
+        prev_close = close.iloc[-2]
         change_pct = (last_close - prev_close) / prev_close * 100
 
         info = stock.info
@@ -56,6 +92,10 @@ def fetch_data(ticker: str):
             "price": last_close,
             "change_pct": change_pct,
             "currency": currency,
+            "sma50": compute_sma(close, 50),
+            "sma200": compute_sma(close, 200),
+            "rsi14": compute_rsi(close, 14),
+            "return_1m": one_month_return(close),
         }
     except Exception as exc:  # keep the report alive even if one ticker fails
         print(f"[WARN] Could not fetch data for {ticker}: {exc}", file=sys.stderr)
@@ -65,6 +105,10 @@ def fetch_data(ticker: str):
 def build_message() -> str:
     today = datetime.now().strftime("%d %B %Y")
     lines = [f"*Daily Market Report — {today}*", ""]
+
+    # Fetch the benchmark once, used for relative performance on every ticker
+    benchmark_data = fetch_data(BENCHMARK_TICKER)
+    benchmark_return_1m = benchmark_data["return_1m"] if benchmark_data else None
 
     for ticker in TICKERS:
         data = fetch_data(ticker)
@@ -78,6 +122,34 @@ def build_message() -> str:
             f"{data['price']:.2f} {data['currency']} "
             f"({data['change_pct']:+.2f}%)"
         )
+
+        # Alert flag — only shown when the daily move is unusually large
+        if abs(data["change_pct"]) >= ALERT_THRESHOLD_PCT:
+            direction = "surged" if data["change_pct"] > 0 else "dropped"
+            lines.append(
+                f"   🚨 ALERT: {data['ticker']} {direction} "
+                f"{data['change_pct']:+.2f}% today (threshold: ±{ALERT_THRESHOLD_PCT:.0f}%)"
+            )
+        
+
+        # Technical indicators line (only shown if we have enough history)
+        sma_parts = []
+        if data["sma50"] is not None:
+            sma_parts.append(f"SMA50: {data['sma50']:.2f}")
+        if data["sma200"] is not None:
+            sma_parts.append(f"SMA200: {data['sma200']:.2f}")
+        if data["rsi14"] is not None:
+            sma_parts.append(f"RSI14: {data['rsi14']:.1f}")
+        if sma_parts:
+            lines.append("   " + " | ".join(sma_parts))
+
+        # 1-month return vs benchmark
+        if data["return_1m"] is not None:
+            rel_str = ""
+            if benchmark_return_1m is not None and data["ticker"] != BENCHMARK_TICKER:
+                relative = data["return_1m"] - benchmark_return_1m
+                rel_str = f" (vs S&P500: {relative:+.2f} pp)"
+            lines.append(f"   1M: {data['return_1m']:+.2f}%{rel_str}")
 
     lines.append("")
     lines.append("_Data via Yahoo Finance. Not investment advice._")
