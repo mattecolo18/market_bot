@@ -48,24 +48,5 @@ symbols, e.g.:
 - `UBSG.SW` → UBS Group (SIX Swiss Exchange)
 - `^GSPC` → S&P 500 index
 
-### 5. Deploy for free with GitHub Actions
-1. Push this folder to a new GitHub repository.
-2. In the repo: **Settings → Secrets and variables → Actions → New repository secret**
-   - Add `TELEGRAM_BOT_TOKEN`
-   - Add `TELEGRAM_CHAT_ID`
-3. That's it — the workflow in `.github/workflows/daily_report.yml` will run
-   automatically on the schedule. You can also trigger it manually from the
-   **Actions** tab (`Run workflow`) to test it without waiting.
 
-## Ideas to extend it (good for making the project more "complete")
-- Add more asset classes: FX rates, crypto, bond yields (yfinance supports
-  most of these).
-- Add a simple technical indicator (e.g. 50-day moving average, RSI) next to
-  each price.
-- Pull top financial headlines (e.g. via an RSS feed) and include 2-3 in the
-  message.
-- Store daily data in a CSV/SQLite file (committed back to the repo) to build
-  your own historical dataset over time — this alone could become a second
-  project (data analysis on data you collected yourself).
-- Turn it into a two-way bot: reply to `/price AAPL` on demand using
-  `python-telegram-bot` instead of a one-way daily push.
+
